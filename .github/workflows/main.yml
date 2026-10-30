@@ -13,6 +13,18 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install pandas numpy requests websocket-client
+      
+      # --- INI ADALAH OBAT OTOMATIS UNTUK SPASI YANG BERANTAKAN ---
+      - name: Rapikan Spasi Otomatis
+        run: |
+          python -c "
+          import re
+          lines = open('main.py', 'r').readlines()
+          fixed = [l.lstrip() if re.match(r'^\s+(def |class |import |from |@|if __name__)', l) else l for l in lines]
+          open('main.py', 'w').writelines(fixed)
+          "
+      # ------------------------------------------------------------
+      
       - run: python main.py run
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
