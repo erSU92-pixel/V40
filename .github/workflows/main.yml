@@ -73,14 +73,14 @@ jobs:
             CMD="run"
           fi
           echo "command=$CMD" >> "$GITHUB_OUTPUT"
-          echo "Will run: python apex.py $CMD"
+          echo "Will run: python main.py $CMD"
 
       - name: Run apex
         id: apex_run
         continue-on-error: true
         run: |
           set -o pipefail
-          python apex.py ${{ steps.cmd.outputs.command }} 2>&1 | tee apex_console.log
+          python main.py ${{ steps.cmd.outputs.command }} 2>&1 | tee main_console.log
 
       - name: Upload logs and exports
         if: always()
@@ -89,7 +89,7 @@ jobs:
           name: apex-run-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             apex.log
-            apex_console.log
+            main_console.log
             apex_export_*.csv
             trade_journal.json
             xauusd_apex_report.json
@@ -144,10 +144,10 @@ jobs:
               head -c 800 signal_state.json
               echo '```'
             fi
-            if [ -f apex_console.log ]; then
+            if [ -f main_console.log ]; then
               echo "### Console tail"
               echo '```'
-              tail -n 30 apex_console.log
+              tail -n 30 main_console.log
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
