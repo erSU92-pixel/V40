@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Local only
+.env
+.env.*
+!.env.example
+apex.log
+*.log
+
+# State files — JANGAN di-ignore (auto-commit ke repo)
+# signal_state.json
+# xauusd_apex_report.json
+# trade_journal.json
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
