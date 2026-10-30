@@ -47,6 +47,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          APEX_ENABLE_DERIV: '0'
           APEX_ACCOUNT_BALANCE_USD: ${{ vars.APEX_ACCOUNT_BALANCE_USD || '10000' }}
           APEX_RISK_PERCENTAGE: ${{ vars.APEX_RISK_PERCENTAGE || '1.0' }}
           APEX_MAX_DAILY_SIGNALS: ${{ vars.APEX_MAX_DAILY_SIGNALS || '5' }}
