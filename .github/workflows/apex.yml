@@ -1,0 +1,59 @@
+name: APEX Signal Bot
+
+on:
+  schedule:
+    # Killzone London (07-10 UTC) — Senin-Jumat
+    - cron: '*/5 7-10 * * 1-5'
+    # Killzone New York (12-16 UTC) — Senin-Jumat
+    - cron: '*/5 12-16 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apex-signal
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pandas websocket-client
+
+      - name: Run APEX bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          APEX_ACCOUNT_BALANCE_USD: ${{ vars.APEX_ACCOUNT_BALANCE_USD || '10000' }}
+          APEX_RISK_PERCENTAGE: ${{ vars.APEX_RISK_PERCENTAGE || '1.0' }}
+          APEX_MAX_DAILY_SIGNALS: ${{ vars.APEX_MAX_DAILY_SIGNALS || '5' }}
+          APEX_SCORE_THRESHOLD: ${{ vars.APEX_SCORE_THRESHOLD || '8' }}
+        run: python run.py
+
+      - name: Commit state files
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(state): auto-update [skip ci]"
+          file_pattern: "signal_state.json xauusd_apex_report.json trade_journal.json"
+          commit_user_name: "apex-bot"
+          commit_user_email: "apex-bot@users.noreply.github.com"
+          commit_author: "apex-bot <apex-bot@users.noreply.github.com>"
