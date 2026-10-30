@@ -48,5 +48,30 @@
         "\u2717 SMC (NONE)"
       ]
     }
+  },
+  {
+    "timestamp": "2026-10-30 08:48:02",
+    "run_count": 3,
+    "active_source": "Yahoo",
+    "final_signal": "NEUTRAL",
+    "entry_price": 3994.8,
+    "confidence": null,
+    "adx": 21.74,
+    "heikin_ashi": "BULLISH",
+    "ob_type": "NONE",
+    "fvg_type": "NONE",
+    "recommended_sl": 0.0,
+    "tp1": 0.0,
+    "tp2": 0.0,
+    "tp3": 0.0,
+    "suggested_lot": 0.0,
+    "decision_path": {
+      "passed": [
+        "\u2713 ADX (21.7 \u2265 20.0)"
+      ],
+      "failed": [
+        "\u2717 SMC (NONE)"
+      ]
+    }
   }
 ]
