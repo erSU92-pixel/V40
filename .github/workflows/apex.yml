@@ -2,9 +2,7 @@ name: APEX Signal Bot
 
 on:
   schedule:
-    # Killzone London (07-10 UTC) — Senin-Jumat
     - cron: '*/5 7-10 * * 1-5'
-    # Killzone New York (12-16 UTC) — Senin-Jumat
     - cron: '*/5 12-16 * * 1-5'
   workflow_dispatch:
 
@@ -36,7 +34,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests numpy pandas websocket-client
+          pip install -r requirements.txt
+
+      - name: Ensure state files exist
+        run: |
+          [ -f signal_state.json ] || echo '{}' > signal_state.json
+          [ -f xauusd_apex_report.json ] || echo '[]' > xauusd_apex_report.json
+          [ -f trade_journal.json ] || echo '[]' > trade_journal.json
 
       - name: Run APEX bot
         env:
@@ -51,9 +55,12 @@ jobs:
 
       - name: Commit state files
         uses: stefanzweifel/git-auto-commit-action@v5
+        continue-on-error: true
         with:
           commit_message: "chore(state): auto-update [skip ci]"
           file_pattern: "signal_state.json xauusd_apex_report.json trade_journal.json"
+          skip_dirty_check: false
+          skip_fetch: true
           commit_user_name: "apex-bot"
           commit_user_email: "apex-bot@users.noreply.github.com"
           commit_author: "apex-bot <apex-bot@users.noreply.github.com>"
