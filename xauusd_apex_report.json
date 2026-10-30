@@ -73,5 +73,40 @@
         "\u2717 SMC (NONE)"
       ]
     }
+  },
+  {
+    "timestamp": "2026-10-30 08:58:45",
+    "run_count": 4,
+    "active_source": "Yahoo",
+    "final_signal": "NEUTRAL",
+    "entry_price": 3996.7,
+    "confidence": {
+      "total": 1,
+      "trend": -2,
+      "momentum": 1,
+      "smc": 1,
+      "adx": 0,
+      "ha": 1,
+      "rsi": 57.2,
+      "adx_value": 20.5
+    },
+    "adx": 20.52,
+    "heikin_ashi": "BULLISH",
+    "ob_type": "NONE",
+    "fvg_type": "BULLISH_FVG",
+    "recommended_sl": 0.0,
+    "tp1": 0.0,
+    "tp2": 0.0,
+    "tp3": 0.0,
+    "suggested_lot": 0.0,
+    "decision_path": {
+      "passed": [
+        "\u2713 ADX (20.5 \u2265 20.0)",
+        "\u2713 SMC (BULLISH_FVG)"
+      ],
+      "failed": [
+        "\u2717 Confluence (+1 vs \u00b18; HA=BULLISH)"
+      ]
+    }
   }
 ]
