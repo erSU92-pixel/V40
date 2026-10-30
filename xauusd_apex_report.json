@@ -1,0 +1,27 @@
+[
+  {
+    "timestamp": "2026-10-30 08:27:06",
+    "run_count": 1,
+    "active_source": "Yahoo",
+    "final_signal": "NEUTRAL",
+    "entry_price": 3990.5,
+    "confidence": null,
+    "adx": 29.13,
+    "heikin_ashi": "BULLISH",
+    "ob_type": "NONE",
+    "fvg_type": "NONE",
+    "recommended_sl": 0.0,
+    "tp1": 0.0,
+    "tp2": 0.0,
+    "tp3": 0.0,
+    "suggested_lot": 0.0,
+    "decision_path": {
+      "passed": [
+        "\u2713 ADX (29.1 \u2265 20.0)"
+      ],
+      "failed": [
+        "\u2717 SMC (NONE)"
+      ]
+    }
+  }
+]
