@@ -1,0 +1,157 @@
+name: Apex Predator Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Apex command'
+        required: true
+        default: 'selftest'
+        type: choice
+        options:
+          - selftest
+          - run
+          - status
+          - health
+          - performance
+          - export
+          - reset-drawdown
+
+concurrency:
+  group: apex-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  apex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore state from 'state' branch
+        run: |
+          if git fetch origin state 2>/dev/null; then
+            for f in signal_state.json signal_state.json.breaker signal_state.json.pause \
+                     signal_state.json.heartbeat signal_state.json.alert signal_state.json.news \
+                     trade_journal.json xauusd_apex_report.json; do
+              if git show "origin/state:$f" > "$f" 2>/dev/null; then
+                echo "restored: $f ($(wc -c < "$f") bytes)"
+              fi
+            done
+          else
+            echo "No 'state' branch yet — fresh start"
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'pandas>=2.0' 'numpy>=1.24' 'requests>=2.31' 'websocket-client>=1.7'
+
+      - name: Determine command
+        id: cmd
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CMD="${{ github.event.inputs.command }}"
+          else
+            CMD="run"
+          fi
+          echo "command=$CMD" >> "$GITHUB_OUTPUT"
+          echo "Will run: python apex.py $CMD"
+
+      - name: Run apex
+        id: apex_run
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python apex.py ${{ steps.cmd.outputs.command }} 2>&1 | tee apex_console.log
+
+      - name: Upload logs and exports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-run-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            apex.log
+            apex_console.log
+            apex_export_*.csv
+            trade_journal.json
+            xauusd_apex_report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Persist state to 'state' branch
+        if: always() && steps.cmd.outputs.command == 'run'
+        run: |
+          git config user.name "apex-bot[bot]"
+          git config user.email "apex-bot@users.noreply.github.com"
+
+          mkdir -p /tmp/apex-state
+          for f in signal_state.json signal_state.json.breaker signal_state.json.pause \
+                   signal_state.json.heartbeat signal_state.json.alert signal_state.json.news \
+                   trade_journal.json xauusd_apex_report.json; do
+            [ -f "$f" ] && cp "$f" /tmp/apex-state/
+          done
+
+          git checkout --orphan state-tmp-$$ 2>/dev/null || git checkout -B state-tmp-$$ 2>/dev/null || true
+          git rm -rf --cached . 2>/dev/null || true
+
+          cp /tmp/apex-state/* . 2>/dev/null || true
+          git add -f signal_state.json signal_state.json.breaker signal_state.json.pause \
+                     signal_state.json.heartbeat signal_state.json.alert signal_state.json.news \
+                     trade_journal.json xauusd_apex_report.json 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "No state changes to commit"
+          else
+            git commit -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+            git push -f origin HEAD:state
+            echo "State pushed to 'state' branch"
+          fi
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Apex Bot — ${{ steps.cmd.outputs.command }}"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| Command | \`${{ steps.cmd.outputs.command }}\` |"
+            echo "| Result | ${{ steps.apex_run.outcome }} |"
+            echo "| UTC time | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+            echo "| Run | ${{ github.run_number }}.${{ github.run_attempt }} |"
+            echo ""
+            if [ -f signal_state.json ]; then
+              echo "### signal_state.json"
+              echo '```json'
+              head -c 800 signal_state.json
+              echo '```'
+            fi
+            if [ -f apex_console.log ]; then
+              echo "### Console tail"
+              echo '```'
+              tail -n 30 apex_console.log
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if apex errored
+        if: steps.apex_run.outcome == 'failure'
+        run: exit 1
