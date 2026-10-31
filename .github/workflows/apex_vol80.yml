@@ -1,0 +1,38 @@
+name: Apex Predator Vol 80 Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Berjalan otomatis setiap 5 menit
+  workflow_dispatch:        # Bisa dijalankan manual dari tab Actions di GitHub
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies Directly
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy requests websocket-client
+
+      - name: Run Apex Bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APEX_ACCOUNT_TYPE: "cent"
+          APEX_RISK_PERCENTAGE: "1.0"
+        run: |
+          python apex_vol80.py run
+
+      - name: Commit Database State & Logs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update Apex Vol 80 state & journal"
+          file_pattern: "*.db *.log"
