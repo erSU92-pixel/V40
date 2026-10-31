@@ -1,12 +1,12 @@
 """
-APEX PREDATOR v10.4 — Vol 80 GitHub Actions Edition
-====================================================
-- Multi-endpoint fallback (endpoint publik baru + legacy)
-- resolve_symbol kompatibel endpoint baru (underlying_symbol)
-- State persisten via Turso
-- One-shot execution untuk cron GitHub Actions
+APEX PREDATOR v10.5 — Vol 80 GitHub Actions Edition (Final)
+============================================================
+- Multi-endpoint fallback
+- resolve_symbol: prioritaskan R_100 → R_75 (R_80 tidak ada di Deriv)
+- Log daftar simbol volatility yang tersedia untuk transparansi
+- Peringatan keras jika Turso tidak dikonfigurasi
 - SMC, Heikin Ashi, ADX, RSI, ATR
-====================================================
+============================================================
 """
 import os, re, json, logging
 import asyncio, requests, numpy as np, pandas as pd
@@ -14,12 +14,13 @@ import websockets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-VERSION = "10.4-Vol80-MultiEndpoint"
+VERSION = "10.5-Vol80-GHA-Final"
 
 @dataclass
 class Config:
-    deriv_symbol: str = "R_80"
-    fallback_symbols: tuple = ("R_80", "R_75", "R_100")
+    # R_80 tidak ada di Deriv. R_100 = volatilitas tertinggi (mendekati "80").
+    deriv_symbol: str = "R_100"
+    fallback_symbols: tuple = ("R_100", "R_75", "R_50")
     price_decimals: int = 2
     min_bars_m5: int = 60
     min_bars_m15: int = 60
@@ -78,26 +79,17 @@ class TursoDB:
     def _exec(self, sql, args=None):
         if not self.enabled:
             return None
-        payload = {
-            "requests": [{
-                "type": "execute",
-                "stmt": {
-                    "sql": sql,
-                    "args": [
-                        {"type": "text" if isinstance(a, str) else "float", "value": str(a)}
-                        for a in (args or [])
-                    ],
-                },
-            }]
-        }
+        payload = {"requests": [{"type": "execute", "stmt": {
+            "sql": sql,
+            "args": [{"type": "text" if isinstance(a, str) else "float", "value": str(a)}
+                     for a in (args or [])],
+        }}]}
         try:
             r = requests.post(
                 f"{self.url}/v2/pipeline",
                 json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": f"Bearer {self.token}",
+                         "Content-Type": "application/json"},
                 timeout=10,
             )
             return r.json() if r.status_code == 200 else None
@@ -127,10 +119,8 @@ class TursoDB:
     def set_state(self, key, val):
         if not self.enabled:
             return
-        self._exec(
-            "INSERT OR REPLACE INTO state (key,value) VALUES (?,?)",
-            [key, json.dumps(val, default=str)],
-        )
+        self._exec("INSERT OR REPLACE INTO state (key,value) VALUES (?,?)",
+                   [key, json.dumps(val, default=str)])
 
     def insert_report(self, r):
         if not self.enabled:
@@ -138,21 +128,17 @@ class TursoDB:
         self._exec(
             """INSERT INTO reports (timestamp,symbol,signal,notified,entry,sl,tp1,tp2,tp3,lot,confidence,adx,ha,ob,path)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            [
-                r["timestamp"], r["symbol"], r["signal"], r["notified"], r["entry"],
-                r["sl"], r["tp1"], r["tp2"], r["tp3"], r["lot"],
-                json.dumps(r["confidence"]), r["adx"], r["ha"], r["ob"], json.dumps(r["path"]),
-            ],
+            [r["timestamp"], r["symbol"], r["signal"], r["notified"], r["entry"],
+             r["sl"], r["tp1"], r["tp2"], r["tp3"], r["lot"],
+             json.dumps(r["confidence"]), r["adx"], r["ha"], r["ob"], json.dumps(r["path"])],
         )
 
     def daily_signal_count(self):
         if not self.enabled:
             return 0
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        res = self._exec(
-            f"SELECT COUNT(*) FROM reports WHERE timestamp LIKE '{today}%' "
-            f"AND signal IN ('BUY','SELL') AND notified=1"
-        )
+        res = self._exec(f"SELECT COUNT(*) FROM reports WHERE timestamp LIKE '{today}%' "
+                         f"AND signal IN ('BUY','SELL') AND notified=1")
         try:
             return int(res["results"][0]["response"]["result"]["rows"][0][0])
         except Exception:
@@ -188,11 +174,8 @@ class DerivWS:
             try:
                 logging.info(f"Mencoba endpoint: {url}")
                 self.ws = await websockets.connect(
-                    url,
-                    ping_interval=20,
-                    ping_timeout=20,
-                    open_timeout=15,
-                    max_size=2**24,
+                    url, ping_interval=20, ping_timeout=20,
+                    open_timeout=15, max_size=2**24,
                 )
                 self.active_endpoint = url
                 logging.info(f"Terhubung via {url}")
@@ -224,13 +207,8 @@ class DerivWS:
             return msg
 
     async def fetch_candles(self, symbol, gran, count):
-        resp = await self.request({
-            "ticks_history": symbol,
-            "style": "candles",
-            "granularity": gran,
-            "count": count,
-            "end": "latest",
-        })
+        resp = await self.request({"ticks_history": symbol, "style": "candles",
+                                   "granularity": gran, "count": count, "end": "latest"})
         candles = resp.get("candles", [])
         if not candles:
             raise RuntimeError(f"Candle kosong untuk {symbol}")
@@ -241,35 +219,39 @@ class DerivWS:
         return df[["datetime", "open", "high", "low", "close"]].dropna().reset_index(drop=True)
 
     async def resolve_symbol(self, preferred, fallbacks):
-        # Endpoint publik baru TIDAK menerima product_type.
         resp = await self.request({"active_symbols": "brief"})
-
         raw = resp.get("active_symbols", [])
         syms = {}
         for s in raw:
-            # Endpoint baru: underlying_symbol / underlying_symbol_name
-            # Endpoint legacy: symbol / display_name
             sym = s.get("underlying_symbol") or s.get("symbol")
             name = s.get("underlying_symbol_name") or s.get("display_name", "")
             if sym:
                 syms[sym] = name
 
+        # Tampilkan simbol volatility yang tersedia untuk transparansi
+        vol_available = [(code, name) for code, name in syms.items()
+                         if "Volatility" in str(name) and code.startswith("R_")]
+        vol_sorted = sorted(vol_available, key=lambda x: x[0])
+        logging.info(f"Volatility indices tersedia: {[c for c, _ in vol_sorted]}")
+
         # 1. Simbol yang diminta + fallback
         for c in [preferred] + list(fallbacks):
             if c in syms:
+                if c != preferred:
+                    logging.warning(f"{preferred} tidak tersedia, memakai {c} ({syms[c]})")
                 return c
 
-        # 2. Cari berdasarkan nama "80" + "Volatility"
+        # 2. Cari berdasarkan nama "80" (kalau-kalau ada)
         for s, name in syms.items():
             if "80" in str(name) and "Volatility" in str(name):
                 return s
 
-        # 3. Fallback terakhir: kode yang mengandung "80"
+        # 3. Fallback terakhir
         for s in syms:
             if "80" in s:
                 return s
 
-        raise RuntimeError("Simbol Volatility 80 tidak ditemukan")
+        raise RuntimeError("Tidak ada simbol volatility yang cocok")
 
 # ---------- Indikator ----------
 def atr(df, period=14):
@@ -370,15 +352,9 @@ def tpsl(df5, signal, cfg, balance):
         return 0, 0, 0, 0, 0
     sl_d = a * cfg.atr_sl_mult
     if signal == "BUY":
-        sl = p - sl_d
-        tp1 = p + a * cfg.atr_tp1_mult
-        tp2 = p + a * cfg.atr_tp2_mult
-        tp3 = p + a * cfg.atr_tp3_mult
+        sl, tp1, tp2, tp3 = p - sl_d, p + a * cfg.atr_tp1_mult, p + a * cfg.atr_tp2_mult, p + a * cfg.atr_tp3_mult
     else:
-        sl = p + sl_d
-        tp1 = p - a * cfg.atr_tp1_mult
-        tp2 = p - a * cfg.atr_tp2_mult
-        tp3 = p - a * cfg.atr_tp3_mult
+        sl, tp1, tp2, tp3 = p + sl_d, p - a * cfg.atr_tp1_mult, p - a * cfg.atr_tp2_mult, p - a * cfg.atr_tp3_mult
     risk = balance * (cfg.risk_percentage / 100)
     lot = round(max(cfg.min_lot, min(cfg.max_lot, risk / sl_d if sl_d > 0 else 0.5)), 2)
     d = cfg.price_decimals
@@ -434,31 +410,22 @@ async def run_once(api, cfg, db, balance):
         notify = True
 
     db.insert_report({
-        "timestamp": now.isoformat(),
-        "symbol": cfg.deriv_symbol,
-        "signal": signal,
-        "notified": notify,
-        "entry": price,
-        "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-        "lot": lot,
-        "confidence": conf,
-        "adx": adx_v,
-        "ha": ha,
-        "ob": ob.get("type"),
-        "path": conf,
+        "timestamp": now.isoformat(), "symbol": cfg.deriv_symbol,
+        "signal": signal, "notified": notify, "entry": price,
+        "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "lot": lot,
+        "confidence": conf, "adx": adx_v, "ha": ha,
+        "ob": ob.get("type"), "path": conf,
     })
 
     if notify:
-        msg = (
-            f"<b>APEX VOL80 v{VERSION}</b>\n\n"
-            f"<b>{signal}</b> @ <code>{price}</code>\n"
-            f"SL: {sl} | TP1: {tp1} | TP2: {tp2} | TP3: {tp3}\n"
-            f"Lot: {lot}\n"
-            f"ADX: {adx_v:.1f} | HA: {ha} | OB: {ob.get('type')}"
-        )
+        msg = (f"<b>APEX {cfg.deriv_symbol} v{VERSION}</b>\n\n"
+               f"<b>{signal}</b> @ <code>{price}</code>\n"
+               f"SL: {sl} | TP1: {tp1} | TP2: {tp2} | TP3: {tp3}\n"
+               f"Lot: {lot}\n"
+               f"ADX: {adx_v:.1f} | HA: {ha} | OB: {ob.get('type')}")
         logging.info(f"SINYAL {signal} terkirim={send_telegram(msg, cfg)}")
     else:
-        logging.info(f"Run OK | signal={signal} | price={price} | adx={adx_v:.1f}")
+        logging.info(f"Run OK | {cfg.deriv_symbol} | signal={signal} | price={price} | adx={adx_v:.1f}")
 
 async def main():
     setup_logging()
@@ -467,7 +434,11 @@ async def main():
     db.init()
 
     if not db.enabled:
-        logging.warning("TURSO_DB_URL/AUTH_TOKEN kosong — state tidak persisten.")
+        logging.warning("=" * 60)
+        logging.warning("TURSO_DB_URL/AUTH_TOKEN KOSONG")
+        logging.warning("Sinyal akan DIKIRIM ULANG setiap run 5 menit sampai berubah.")
+        logging.warning("Set kedua secret ini untuk mengaktifkan dedup sinyal.")
+        logging.warning("=" * 60)
 
     api = DerivWS()
     try:
