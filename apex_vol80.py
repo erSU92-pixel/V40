@@ -1,8 +1,8 @@
 """
-APEX PREDATOR v10.7 — Vol 100 (Vol 80 Proxy) GitHub Actions Edition
+APEX PREDATOR v10.9 — Vol 100 (Proxy Vol 80) GitHub Actions Edition
 ====================================================================
-- TursoDB: Auto-convert libsql:// ke https://
-- TursoDB: Fix data type parsing (Boolean/Integer/Float)
+- TursoDB: Fix strict JSON type (float/int dikirim sebagai number murni)
+- TursoDB: Casting numpy ke Python native type sebelum kirim
 - DerivWS: Multi-endpoint fallback
 - Strategi: SMC, Heikin Ashi, ADX, RSI, ATR
 ====================================================================
@@ -13,11 +13,10 @@ import websockets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-VERSION = "10.7-Final"
+VERSION = "10.9-Final"
 
 @dataclass
 class Config:
-    # R_80 tidak ada di Deriv. R_100 = volatilitas tertinggi (proxy terbaik).
     deriv_symbol: str = "R_100"
     fallback_symbols: tuple = ("R_100", "R_75", "R_50")
     price_decimals: int = 2
@@ -68,7 +67,7 @@ def setup_logging():
 def _redact(t):
     return re.sub(r"token=[^&\s'\"]+", "token=***", str(t))
 
-# ---------- Turso ----------
+# ---------- Turso (Strict Type Casting) ----------
 class TursoDB:
     def __init__(self):
         self.url = os.getenv("TURSO_DB_URL", "").rstrip("/")
@@ -84,33 +83,40 @@ class TursoDB:
         
         formatted_args = []
         for a in (args or []):
-            if isinstance(a, bool):
-                formatted_args.append({"type": "integer", "value": str(int(a))})
-            elif isinstance(a, int):
-                formatted_args.append({"type": "integer", "value": str(a)})
-            elif isinstance(a, float):
-                formatted_args.append({"type": "float", "value": str(a)})
+            if a is None:
+                formatted_args.append({"type": "null"})
+            elif isinstance(a, bool):
+                # Boolean harus jadi integer 0/1 murni (bukan string)
+                formatted_args.append({"type": "integer", "value": int(a)})
+            elif isinstance(a, (int, np.integer)):
+                # Cast ke int Python murni, kirim sbg number
+                formatted_args.append({"type": "integer", "value": int(a)})
+            elif isinstance(a, (float, np.floating)):
+                # Cast ke float Python murni, kirim sbg number
+                formatted_args.append({"type": "float", "value": float(a)})
             else:
+                # String/JSON text
                 formatted_args.append({"type": "text", "value": str(a)})
 
         payload = {"requests": [{"type": "execute", "stmt": {
             "sql": sql,
             "args": formatted_args,
         }}]}
+        
         try:
             r = requests.post(
                 f"{self.url}/v2/pipeline",
                 json=payload,
                 headers={"Authorization": f"Bearer {self.token}",
                          "Content-Type": "application/json"},
-                timeout=10,
+                timeout=15,
             )
             if r.status_code != 200:
                 logging.warning(f"Turso HTTP {r.status_code}: {r.text}")
                 return None
             return r.json()
         except Exception as e:
-            logging.warning(f"Turso error: {_redact(e)}")
+            logging.warning(f"Turso network error: {_redact(e)}")
             return None
 
     def init(self):
@@ -132,8 +138,7 @@ class TursoDB:
                 if rows:
                     return json.loads(rows[0][0]["value"])
             return default
-        except Exception as e:
-            logging.warning(f"Turso parse error: {_redact(e)}")
+        except Exception:
             return default
 
     def set_state(self, key, val):
@@ -145,12 +150,30 @@ class TursoDB:
     def insert_report(self, r):
         if not self.enabled:
             return
+        
+        # Casting ketat agar tidak ada numpy/boolean yang lolos
+        args = [
+            str(r["timestamp"]),
+            str(r["symbol"]),
+            str(r["signal"]),
+            int(r["notified"]),      # 1 atau 0
+            float(r["entry"]),       # f64
+            float(r["sl"]),          # f64
+            float(r["tp1"]),         # f64
+            float(r["tp2"]),         # f64
+            float(r["tp3"]),         # f64
+            float(r["lot"]),         # f64
+            json.dumps(r["confidence"]),
+            float(r["adx"]),         # f64
+            str(r["ha"]),
+            str(r["ob"]),
+            json.dumps(r["path"]),
+        ]
+        
         self._exec(
             """INSERT INTO reports (timestamp,symbol,signal,notified,entry,sl,tp1,tp2,tp3,lot,confidence,adx,ha,ob,path)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            [r["timestamp"], r["symbol"], r["signal"], int(r["notified"]), r["entry"],
-             r["sl"], r["tp1"], r["tp2"], r["tp3"], r["lot"],
-             json.dumps(r["confidence"]), r["adx"], r["ha"], r["ob"], json.dumps(r["path"])],
+            args
         )
 
     def daily_signal_count(self):
@@ -369,7 +392,7 @@ def tpsl(df5, signal, cfg, balance):
     a = atr(df5)
     p = float(df5["close"].iloc[-1])
     if a <= 0 or signal == "NEUTRAL":
-        return 0, 0, 0, 0, 0
+        return 0.0, 0.0, 0.0, 0.0, 0.0
     sl_d = a * cfg.atr_sl_mult
     if signal == "BUY":
         sl, tp1, tp2, tp3 = p - sl_d, p + a * cfg.atr_tp1_mult, p + a * cfg.atr_tp2_mult, p + a * cfg.atr_tp3_mult
