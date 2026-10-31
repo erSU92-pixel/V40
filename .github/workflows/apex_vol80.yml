@@ -3,7 +3,7 @@ name: Apex Predator Vol 80 Bot
 on:
   schedule:
     - cron: '*/5 * * * *'  # Berjalan otomatis setiap 5 menit
-  workflow_dispatch:        # Bisa dijalankan manual dari tab Actions di GitHub
+  workflow_dispatch:        # Bisa dijalankan manual dari tab Actions
 
 jobs:
   run-bot:
@@ -20,7 +20,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy requests websocket-client
+          pip install pandas numpy requests
 
       - name: Run Apex Bot
         env:
@@ -30,10 +30,3 @@ jobs:
           APEX_RISK_PERCENTAGE: "1.0"
         run: |
           python apex_vol80.py run
-
-      - name: Commit Database State & Logs
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Auto-update Apex Vol 80 state & journal"
-          file_pattern: "*.db"
-          skip_empty_commits: true
