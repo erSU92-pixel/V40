@@ -1,5 +1,3 @@
-Berikut adalah kode lengkap file apex_vol80.py yang sudah disempurnakan (penambahan header anti-Cloudflare 520, pembersihan total fitur non-sintetik, dan optimalisasi Vol 80).
-Anda tinggal salin (copy) seluruh kode di bawah ini dan tempel langsung ke file apex_vol80.py di repository GitHub Anda:
 """
 APEX PREDATOR v8.0 — Synthetic Vol 80 Edition (Optimized & Hardened)
 =========================================================================
