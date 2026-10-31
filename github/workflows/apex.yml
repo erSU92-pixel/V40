@@ -1,0 +1,39 @@
+name: Apex Predator Vol 80
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: apex-vol80
+  cancel-in-progress: false # Menunggu run sebelumnya selesai, bukan membatalkannya
+
+permissions:
+  contents: read
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # Batas aman; bot one-shot selesai dalam hitungan detik
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas requests websockets
+
+      - name: Run Apex Bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APEX_BALANCE_USD: "1000"
+          APEX_RISK_PERCENTAGE: "1.0"
+        run: python apex_vol80.py
