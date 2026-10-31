@@ -1,11 +1,11 @@
 """
-APEX PREDATOR v10.6 — Vol 80 GitHub Actions Edition (Final Fix)
-==============================================================
+APEX PREDATOR v10.7 — Vol 100 (Vol 80 Proxy) GitHub Actions Edition
+====================================================================
 - TursoDB: Auto-convert libsql:// ke https://
-- TursoDB: Parsing JSON response /v2/pipeline yang akurat
-- DerivWS: Multi-endpoint fallback + resolve_symbol kompatibel endpoint baru
+- TursoDB: Fix data type parsing (Boolean/Integer/Float)
+- DerivWS: Multi-endpoint fallback
 - Strategi: SMC, Heikin Ashi, ADX, RSI, ATR
-==============================================================
+====================================================================
 """
 import os, re, json, logging
 import asyncio, requests, numpy as np, pandas as pd
@@ -13,11 +13,11 @@ import websockets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-VERSION = "10.6-Vol80-Final"
+VERSION = "10.7-Final"
 
 @dataclass
 class Config:
-    # R_80 tidak ada di Deriv. R_100 = volatilitas tertinggi.
+    # R_80 tidak ada di Deriv. R_100 = volatilitas tertinggi (proxy terbaik).
     deriv_symbol: str = "R_100"
     fallback_symbols: tuple = ("R_100", "R_75", "R_50")
     price_decimals: int = 2
@@ -72,7 +72,6 @@ def _redact(t):
 class TursoDB:
     def __init__(self):
         self.url = os.getenv("TURSO_DB_URL", "").rstrip("/")
-        # Turso menggunakan protokol libsql://, tapi HTTP API butuh https://
         if self.url.startswith("libsql://"):
             self.url = self.url.replace("libsql://", "https://")
             
@@ -82,10 +81,21 @@ class TursoDB:
     def _exec(self, sql, args=None):
         if not self.enabled:
             return None
+        
+        formatted_args = []
+        for a in (args or []):
+            if isinstance(a, bool):
+                formatted_args.append({"type": "integer", "value": str(int(a))})
+            elif isinstance(a, int):
+                formatted_args.append({"type": "integer", "value": str(a)})
+            elif isinstance(a, float):
+                formatted_args.append({"type": "float", "value": str(a)})
+            else:
+                formatted_args.append({"type": "text", "value": str(a)})
+
         payload = {"requests": [{"type": "execute", "stmt": {
             "sql": sql,
-            "args": [{"type": "text" if isinstance(a, str) else "float", "value": str(a)}
-                     for a in (args or [])],
+            "args": formatted_args,
         }}]}
         try:
             r = requests.post(
@@ -138,7 +148,7 @@ class TursoDB:
         self._exec(
             """INSERT INTO reports (timestamp,symbol,signal,notified,entry,sl,tp1,tp2,tp3,lot,confidence,adx,ha,ob,path)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            [r["timestamp"], r["symbol"], r["signal"], r["notified"], r["entry"],
+            [r["timestamp"], r["symbol"], r["signal"], int(r["notified"]), r["entry"],
              r["sl"], r["tp1"], r["tp2"], r["tp3"], r["lot"],
              json.dumps(r["confidence"]), r["adx"], r["ha"], r["ob"], json.dumps(r["path"])],
         )
@@ -233,38 +243,30 @@ class DerivWS:
         return df[["datetime", "open", "high", "low", "close"]].dropna().reset_index(drop=True)
 
     async def resolve_symbol(self, preferred, fallbacks):
-        # Endpoint publik baru TIDAK menerima product_type.
         resp = await self.request({"active_symbols": "brief"})
-
         raw = resp.get("active_symbols", [])
         syms = {}
         for s in raw:
-            # Endpoint baru: underlying_symbol / underlying_symbol_name
-            # Endpoint legacy: symbol / display_name
             sym = s.get("underlying_symbol") or s.get("symbol")
             name = s.get("underlying_symbol_name") or s.get("display_name", "")
             if sym:
                 syms[sym] = name
 
-        # Tampilkan simbol volatility yang tersedia
         vol_available = [(code, name) for code, name in syms.items()
                          if "Volatility" in str(name) and code.startswith("R_")]
         vol_sorted = sorted(vol_available, key=lambda x: x[0])
         logging.info(f"Volatility indices tersedia: {[c for c, _ in vol_sorted]}")
 
-        # 1. Simbol yang diminta + fallback
         for c in [preferred] + list(fallbacks):
             if c in syms:
                 if c != preferred:
                     logging.warning(f"{preferred} tidak tersedia, memakai {c} ({syms[c]})")
                 return c
 
-        # 2. Cari berdasarkan nama "80" (kalau-kalau ada)
         for s, name in syms.items():
             if "80" in str(name) and "Volatility" in str(name):
                 return s
 
-        # 3. Fallback terakhir: kode yang mengandung "80"
         for s in syms:
             if "80" in s:
                 return s
