@@ -1,12 +1,11 @@
 """
-APEX PREDATOR v10.5 — Vol 80 GitHub Actions Edition (Final)
-============================================================
-- Multi-endpoint fallback
-- resolve_symbol: prioritaskan R_100 → R_75 (R_80 tidak ada di Deriv)
-- Log daftar simbol volatility yang tersedia untuk transparansi
-- Peringatan keras jika Turso tidak dikonfigurasi
-- SMC, Heikin Ashi, ADX, RSI, ATR
-============================================================
+APEX PREDATOR v10.6 — Vol 80 GitHub Actions Edition (Final Fix)
+==============================================================
+- TursoDB: Auto-convert libsql:// ke https://
+- TursoDB: Parsing JSON response /v2/pipeline yang akurat
+- DerivWS: Multi-endpoint fallback + resolve_symbol kompatibel endpoint baru
+- Strategi: SMC, Heikin Ashi, ADX, RSI, ATR
+==============================================================
 """
 import os, re, json, logging
 import asyncio, requests, numpy as np, pandas as pd
@@ -14,11 +13,11 @@ import websockets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-VERSION = "10.5-Vol80-GHA-Final"
+VERSION = "10.6-Vol80-Final"
 
 @dataclass
 class Config:
-    # R_80 tidak ada di Deriv. R_100 = volatilitas tertinggi (mendekati "80").
+    # R_80 tidak ada di Deriv. R_100 = volatilitas tertinggi.
     deriv_symbol: str = "R_100"
     fallback_symbols: tuple = ("R_100", "R_75", "R_50")
     price_decimals: int = 2
@@ -73,6 +72,10 @@ def _redact(t):
 class TursoDB:
     def __init__(self):
         self.url = os.getenv("TURSO_DB_URL", "").rstrip("/")
+        # Turso menggunakan protokol libsql://, tapi HTTP API butuh https://
+        if self.url.startswith("libsql://"):
+            self.url = self.url.replace("libsql://", "https://")
+            
         self.token = os.getenv("TURSO_AUTH_TOKEN", "")
         self.enabled = bool(self.url and self.token)
 
@@ -92,7 +95,10 @@ class TursoDB:
                          "Content-Type": "application/json"},
                 timeout=10,
             )
-            return r.json() if r.status_code == 200 else None
+            if r.status_code != 200:
+                logging.warning(f"Turso HTTP {r.status_code}: {r.text}")
+                return None
+            return r.json()
         except Exception as e:
             logging.warning(f"Turso error: {_redact(e)}")
             return None
@@ -111,9 +117,13 @@ class TursoDB:
             return default
         res = self._exec(f"SELECT value FROM state WHERE key='{key}'")
         try:
-            rows = res["results"][0]["response"]["result"]["rows"]
-            return json.loads(rows[0][0]) if rows else default
-        except Exception:
+            if res and "results" in res:
+                rows = res["results"][0].get("response", {}).get("result", {}).get("rows", [])
+                if rows:
+                    return json.loads(rows[0][0]["value"])
+            return default
+        except Exception as e:
+            logging.warning(f"Turso parse error: {_redact(e)}")
             return default
 
     def set_state(self, key, val):
@@ -140,7 +150,11 @@ class TursoDB:
         res = self._exec(f"SELECT COUNT(*) FROM reports WHERE timestamp LIKE '{today}%' "
                          f"AND signal IN ('BUY','SELL') AND notified=1")
         try:
-            return int(res["results"][0]["response"]["result"]["rows"][0][0])
+            if res and "results" in res:
+                rows = res["results"][0].get("response", {}).get("result", {}).get("rows", [])
+                if rows:
+                    return int(rows[0][0]["value"])
+            return 0
         except Exception:
             return 0
 
@@ -219,16 +233,20 @@ class DerivWS:
         return df[["datetime", "open", "high", "low", "close"]].dropna().reset_index(drop=True)
 
     async def resolve_symbol(self, preferred, fallbacks):
+        # Endpoint publik baru TIDAK menerima product_type.
         resp = await self.request({"active_symbols": "brief"})
+
         raw = resp.get("active_symbols", [])
         syms = {}
         for s in raw:
+            # Endpoint baru: underlying_symbol / underlying_symbol_name
+            # Endpoint legacy: symbol / display_name
             sym = s.get("underlying_symbol") or s.get("symbol")
             name = s.get("underlying_symbol_name") or s.get("display_name", "")
             if sym:
                 syms[sym] = name
 
-        # Tampilkan simbol volatility yang tersedia untuk transparansi
+        # Tampilkan simbol volatility yang tersedia
         vol_available = [(code, name) for code, name in syms.items()
                          if "Volatility" in str(name) and code.startswith("R_")]
         vol_sorted = sorted(vol_available, key=lambda x: x[0])
@@ -246,7 +264,7 @@ class DerivWS:
             if "80" in str(name) and "Volatility" in str(name):
                 return s
 
-        # 3. Fallback terakhir
+        # 3. Fallback terakhir: kode yang mengandung "80"
         for s in syms:
             if "80" in s:
                 return s
