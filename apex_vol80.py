@@ -1,8 +1,7 @@
 """
-APEX PREDATOR v10.9 — Vol 100 (Proxy Vol 80) GitHub Actions Edition
+APEX PREDATOR v11.0 — Vol 100 (Proxy Vol 80) GitHub Actions Edition
 ====================================================================
-- TursoDB: Fix strict JSON type (float/int dikirim sebagai number murni)
-- TursoDB: Casting numpy ke Python native type sebelum kirim
+- TursoDB: 100% patuh spesifikasi libsql HTTP v2 (Integer=String, Float=Number)
 - DerivWS: Multi-endpoint fallback
 - Strategi: SMC, Heikin Ashi, ADX, RSI, ATR
 ====================================================================
@@ -13,10 +12,11 @@ import websockets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-VERSION = "10.9-Final"
+VERSION = "11.0-Final"
 
 @dataclass
 class Config:
+    # Vol 80 tidak ada, R_100 adalah volatilitas tertinggi di Deriv
     deriv_symbol: str = "R_100"
     fallback_symbols: tuple = ("R_100", "R_75", "R_50")
     price_decimals: int = 2
@@ -67,7 +67,7 @@ def setup_logging():
 def _redact(t):
     return re.sub(r"token=[^&\s'\"]+", "token=***", str(t))
 
-# ---------- Turso (Strict Type Casting) ----------
+# ---------- Turso (Spesifikasi Ketat libSQL v2) ----------
 class TursoDB:
     def __init__(self):
         self.url = os.getenv("TURSO_DB_URL", "").rstrip("/")
@@ -86,16 +86,14 @@ class TursoDB:
             if a is None:
                 formatted_args.append({"type": "null"})
             elif isinstance(a, bool):
-                # Boolean harus jadi integer 0/1 murni (bukan string)
-                formatted_args.append({"type": "integer", "value": int(a)})
+                # Integer WAJIB dikirim sebagai String di Turso v2
+                formatted_args.append({"type": "integer", "value": str(int(a))})
             elif isinstance(a, (int, np.integer)):
-                # Cast ke int Python murni, kirim sbg number
-                formatted_args.append({"type": "integer", "value": int(a)})
+                formatted_args.append({"type": "integer", "value": str(int(a))})
             elif isinstance(a, (float, np.floating)):
-                # Cast ke float Python murni, kirim sbg number
+                # Float WAJIB dikirim sebagai JSON Number murni
                 formatted_args.append({"type": "float", "value": float(a)})
             else:
-                # String/JSON text
                 formatted_args.append({"type": "text", "value": str(a)})
 
         payload = {"requests": [{"type": "execute", "stmt": {
@@ -151,23 +149,13 @@ class TursoDB:
         if not self.enabled:
             return
         
-        # Casting ketat agar tidak ada numpy/boolean yang lolos
         args = [
-            str(r["timestamp"]),
-            str(r["symbol"]),
-            str(r["signal"]),
-            int(r["notified"]),      # 1 atau 0
-            float(r["entry"]),       # f64
-            float(r["sl"]),          # f64
-            float(r["tp1"]),         # f64
-            float(r["tp2"]),         # f64
-            float(r["tp3"]),         # f64
-            float(r["lot"]),         # f64
-            json.dumps(r["confidence"]),
-            float(r["adx"]),         # f64
-            str(r["ha"]),
-            str(r["ob"]),
-            json.dumps(r["path"]),
+            str(r["timestamp"]), str(r["symbol"]), str(r["signal"]),
+            int(r["notified"]),
+            float(r["entry"]), float(r["sl"]), float(r["tp1"]), 
+            float(r["tp2"]), float(r["tp3"]), float(r["lot"]),
+            json.dumps(r["confidence"]), float(r["adx"]), 
+            str(r["ha"]), str(r["ob"]), json.dumps(r["path"]),
         ]
         
         self._exec(
