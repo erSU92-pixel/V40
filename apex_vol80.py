@@ -1,11 +1,12 @@
 """
-APEX PREDATOR v10.3 — Vol 80 GitHub Actions Edition (Multi-Endpoint Fallback)
-==============================================================================
-- WebSocket dengan fallback otomatis ke 3 endpoint Deriv
+APEX PREDATOR v10.4 — Vol 80 GitHub Actions Edition
+====================================================
+- Multi-endpoint fallback (endpoint publik baru + legacy)
+- resolve_symbol kompatibel endpoint baru (underlying_symbol)
 - State persisten via Turso
 - One-shot execution untuk cron GitHub Actions
 - SMC, Heikin Ashi, ADX, RSI, ATR
-==============================================================================
+====================================================
 """
 import os, re, json, logging
 import asyncio, requests, numpy as np, pandas as pd
@@ -13,7 +14,7 @@ import websockets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-VERSION = "10.3-Vol80-MultiEndpoint"
+VERSION = "10.4-Vol80-MultiEndpoint"
 
 @dataclass
 class Config:
@@ -67,7 +68,7 @@ def setup_logging():
 def _redact(t):
     return re.sub(r"token=[^&\s'\"]+", "token=***", str(t))
 
-# ---------- Turso (opsional, untuk persistensi state) ----------
+# ---------- Turso ----------
 class TursoDB:
     def __init__(self):
         self.url = os.getenv("TURSO_DB_URL", "").rstrip("/")
@@ -168,7 +169,7 @@ class TursoDB:
                 pass
         return False
 
-# ---------- Deriv WebSocket (multi-endpoint fallback) ----------
+# ---------- Deriv WebSocket ----------
 class DerivWS:
     ENDPOINTS = [
         "wss://api.derivws.com/trading/v1/options/ws/public",
@@ -240,14 +241,34 @@ class DerivWS:
         return df[["datetime", "open", "high", "low", "close"]].dropna().reset_index(drop=True)
 
     async def resolve_symbol(self, preferred, fallbacks):
-        resp = await self.request({"active_symbols": "brief", "product_type": "basic"})
-        syms = {s["symbol"]: s.get("display_name", "") for s in resp.get("active_symbols", [])}
+        # Endpoint publik baru TIDAK menerima product_type.
+        resp = await self.request({"active_symbols": "brief"})
+
+        raw = resp.get("active_symbols", [])
+        syms = {}
+        for s in raw:
+            # Endpoint baru: underlying_symbol / underlying_symbol_name
+            # Endpoint legacy: symbol / display_name
+            sym = s.get("underlying_symbol") or s.get("symbol")
+            name = s.get("underlying_symbol_name") or s.get("display_name", "")
+            if sym:
+                syms[sym] = name
+
+        # 1. Simbol yang diminta + fallback
         for c in [preferred] + list(fallbacks):
             if c in syms:
                 return c
+
+        # 2. Cari berdasarkan nama "80" + "Volatility"
         for s, name in syms.items():
-            if "80" in name and "Volatility" in name:
+            if "80" in str(name) and "Volatility" in str(name):
                 return s
+
+        # 3. Fallback terakhir: kode yang mengandung "80"
+        for s in syms:
+            if "80" in s:
+                return s
+
         raise RuntimeError("Simbol Volatility 80 tidak ditemukan")
 
 # ---------- Indikator ----------
